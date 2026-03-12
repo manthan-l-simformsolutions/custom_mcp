@@ -3,8 +3,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { exec } from "child_process";
 import { promisify } from "util";
+import fs from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const execAsync = promisify(exec);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const server = new McpServer({
     name: "weather-server",
@@ -120,6 +125,74 @@ server.registerTool(
                 isError: true,
             };
         }
+    }
+);
+
+
+// Register a resource to serve a real-time weather report
+server.registerResource(
+    "weather_report",
+    "weather://global/current",
+    { description: "A real-time weather report for major cities worldwide" },
+    async (uri) => {
+        try {
+            // Using Open-Meteo API for real-time global weather
+            // New York, London, Tokyo coordinates
+            const url = `https://api.open-meteo.com/v1/forecast?latitude=40.7143,51.5085,35.6895&longitude=-74.006,-0.1257,139.6917&current=temperature_2m,relative_humidity_2m,weather_code&timezone=auto`;
+            const response = await fetch(url);
+
+            if (!response.ok) {
+                throw new Error(`Weather API returned ${response.status} ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            const cities = ["New York", "London", "Tokyo"];
+
+            let report = "# Global Weather Report (Real-time)\n\n";
+            report += `Generated at: ${new Date().toISOString()}\n\n`;
+
+            data.forEach((cityData, index) => {
+                report += `## ${cities[index]}\n`;
+                report += `- **Temperature**: ${cityData.current.temperature_2m}${cityData.current_units.temperature_2m}\n`;
+                report += `- **Humidity**: ${cityData.current.relative_humidity_2m}${cityData.current_units.relative_humidity_2m}\n`;
+                report += `\n`;
+            });
+
+            return {
+                contents: [
+                    {
+                        uri: uri.href,
+                        mimeType: "text/markdown",
+                        text: report
+                    }
+                ]
+            };
+        } catch (error) {
+            console.error("Failed to fetch real-time weather report:", error);
+            throw new Error("Failed to generate real-time weather report");
+        }
+    }
+);
+
+// Register a prompt for the weather demo
+server.registerPrompt(
+    "weather_demo",
+    {
+        description: "A prompt for an agent to check weather using the get_weather tool",
+        argsSchema: { city: z.string().describe("The city to check weather for") }
+    },
+    ({ city }) => {
+        return {
+            messages: [
+                {
+                    role: "user",
+                    content: {
+                        type: "text",
+                        text: `What is the current weather in ${city}? Please use the get_weather tool to find out and then summarize the result.`
+                    }
+                }
+            ]
+        };
     }
 );
 

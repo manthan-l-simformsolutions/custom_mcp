@@ -16,6 +16,23 @@ Review local unstaged and staged changes in a Git repository.
 - **Input:** `path` (string) - Absolute path to the Git repository.
 - **How it works:** Executes `git diff HEAD` and `git status -s` in the specified directory to extract and return the repository's current status and file diffs.
 
+## Resources
+
+This server exposes the following MCP resources:
+
+### 1. `weather_report` (URI: `weather://global/current`)
+A dynamic resource that provides a real-time weather report in Markdown format.
+- **How it works:** When read, it directly queries the Open-Meteo API for current weather statistics (temperature and humidity) in New York, London, and Tokyo, and formats it as a read-only document.
+
+## Prompts
+
+This server exposes the following MCP prompts:
+
+### 1. `weather_demo`
+A prompt designed to demonstrate how an agent can use tools to find weather.
+- **Arguments:** `city` (string) - The city to check weather for.
+- **How it works:** Returns a prompt instructing the connected agent to "use the get_weather tool to find out the current weather in [city] and then summarize the result".
+
 ## Installation
 
 Ensure you have Node.js installed, then install the required dependencies:
