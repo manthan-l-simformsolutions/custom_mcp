@@ -1,0 +1,128 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
+
+const server = new McpServer({
+    name: "weather-server",
+    version: "1.0.0",
+});
+
+server.registerTool(
+    "get_weather",
+    {
+        description: "Get current weather for a specific city",
+        inputSchema: {
+            city: z.string().describe("Name of the city"),
+        },
+    },
+    async ({ city }) => {
+        try {
+            const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en&format=json`;
+            const geoResponse = await fetch(geoUrl);
+
+            if (!geoResponse.ok) {
+                return {
+                    content: [{ type: "text", text: `Error: Geocoding API returned ${geoResponse.status} ${geoResponse.statusText}` }],
+                    isError: true,
+                };
+            }
+
+            const geoData = await geoResponse.json();
+            if (!geoData.results || geoData.results.length === 0) {
+                return {
+                    content: [{ type: "text", text: `Error: Location not found for city: ${city}` }],
+                    isError: true,
+                };
+            }
+
+            const { latitude, longitude, name, country } = geoData.results[0];
+
+            // Using Open-Meteo API (no API key required)
+            const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,rain,showers,snowfall,weather_code,cloud_cover,pressure_msl,surface_pressure,wind_speed_10m,wind_direction_10m,wind_gusts_10m&timezone=auto`;
+            const response = await fetch(url);
+
+            if (!response.ok) {
+                return {
+                    content: [{ type: "text", text: `Error: Weather API returned ${response.status} ${response.statusText}` }],
+                    isError: true,
+                };
+            }
+
+            const data = await response.json();
+
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: JSON.stringify({ location: `${name}, ${country}`, weather: data.current }, null, 2),
+                    },
+                ],
+            };
+        } catch (error) {
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `Error fetching weather data: ${error.message}`,
+                    }
+                ],
+                isError: true,
+            };
+        }
+    }
+);
+
+server.registerTool(
+    "review_code",
+    {
+        description: "Review local unstaged / staged changes in a git repository",
+        inputSchema: {
+            path: z.string().describe("Absolute path to the git repository"),
+        },
+    },
+    async ({ path }) => {
+        try {
+            // Get both staged and unstaged changes
+            const { stdout: diffStdout } = await execAsync("git diff HEAD", { cwd: path });
+            const { stdout: statusStdout } = await execAsync("git status -s", { cwd: path });
+
+            if (!diffStdout) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: "No changes found in the repository to review.",
+                        },
+                    ],
+                };
+            }
+
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `Repository Status:\n${statusStdout}\n\nDiff:\n${diffStdout}`,
+                    },
+                ],
+            };
+        } catch (error) {
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `Error retrieving git diff: ${error.message}`,
+                    }
+                ],
+                isError: true,
+            };
+        }
+    }
+);
+
+const transport = new StdioServerTransport();
+await server.connect(transport);
+console.log("Weather MCP server running on stdio");

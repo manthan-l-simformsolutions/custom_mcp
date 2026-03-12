@@ -1,0 +1,15 @@
+{
+  "name": "weather-server",
+  "version": "1.0.0",
+  "description": "Custom Weather MCP Server",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "simple-git": "^3.32.3",
+    "zod": "^4.3.6"
+  }
+}
