@@ -202,9 +202,11 @@ const app = express();
 app.use(cors());
 
 const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => Math.random().toString(36).substring(2)
+    sessionIdGenerator: () => Math.random().toString(36).substring(2),
+    enableJsonResponse: true
 });
 server.connect(transport);
+
 
 app.all("/sse", async (req, res) => {
     try {
