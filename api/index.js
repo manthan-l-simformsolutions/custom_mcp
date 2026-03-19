@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import express from "express";
 import cors from "cors";
 import { z } from "zod";
@@ -201,21 +201,19 @@ server.registerPrompt(
 const app = express();
 app.use(cors());
 
-const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => Math.random().toString(36).substring(2),
-    enableJsonResponse: true
+let transport;
+
+app.get("/sse", async (req, res) => {
+    // @ts-ignore : Requried for Cursor's legacy SSE fallback on serverless platforms
+    transport = new SSEServerTransport("/message", res);
+    await server.connect(transport);
 });
-server.connect(transport);
 
-
-app.all("/sse", async (req, res) => {
-    try {
-        await transport.handleRequest(req, res);
-    } catch (error) {
-        console.error("Error handling MCP request:", error);
-        if (!res.headersSent) {
-            res.status(500).json({ error: "Internal server error" });
-        }
+app.post("/message", async (req, res) => {
+    if (transport) {
+        await transport.handlePostMessage(req, res);
+    } else {
+        res.status(400).send("No active SSE connection");
     }
 });
 
