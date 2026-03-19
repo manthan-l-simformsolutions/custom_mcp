@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express from "express";
 import cors from "cors";
 import { z } from "zod";
@@ -198,64 +198,82 @@ function createNewServer() {
 const app = express();
 app.use(cors());
 
-// Map to store active transports by their session ID
-// Key: sessionId, Value: SSEServerTransport
-const transports = new Map();
+// Express middleware to force the required Accept header into the raw Node.js request.
+// The MCP SDK uses @hono/node-server which reads req.rawHeaders, bypassing Express's req.headers mutation.
+app.use((req, res, next) => {
+    let found = false;
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+        if (req.rawHeaders[i].toLowerCase() === 'accept') {
+            req.rawHeaders[i + 1] = 'application/json, text/event-stream';
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        req.rawHeaders.push('Accept', 'application/json, text/event-stream');
+    }
+    req.headers['accept'] = 'application/json, text/event-stream';
+    next();
+});
 
-app.get("/sse", async (req, res) => {
+// Since Vercel Serverless destroys memory across connections, we MUST use completely stateless HTTP requests instead of SSE.
+app.post("/sse", async (req, res) => {
     try {
-        // @ts-ignore : Required for Cursor's legacy SSE fallback on serverless platforms
-        const transport = new SSEServerTransport("/sse", res);
+        const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: undefined, // Stateless mode
+            enableJsonResponse: true // Return JSON directly in the POST response
+        });
+
         const server = createNewServer();
         await server.connect(transport);
 
-        // Store the transport when the session is initialized
-        if (transport.sessionId) {
-            transports.set(transport.sessionId, transport);
+        // Intercept transport.onmessage to trick the McpServer into thinking it's initialized on every fresh stateless request!
+        const originalOnMessage = transport.onmessage;
+        transport.onmessage = async (msg) => {
+            // If the client's request is not "initialize", we silently initialize the server first.
+            if (msg.method !== 'initialize') {
+                const fakeInit = {
+                    jsonrpc: "2.0",
+                    id: "stateless-init-hack",
+                    method: "initialize",
+                    params: {
+                        protocolVersion: "2024-11-05",
+                        capabilities: {},
+                        clientInfo: { name: "vercel-stateless-proxy", version: "1.0.0" }
+                    }
+                };
 
-            // Cleanup transport when connection closes
-            res.on('close', () => {
-                transports.delete(transport.sessionId);
-                try {
-                    transport.close();
-                } catch (e) {
-                    // Ignore close errors
-                }
-            });
-        }
+                // Temporarily disable transport.send so the server doesn't respond to the fake initialize payload
+                const originalSend = transport.send;
+                transport.send = async () => { };
+
+                await originalOnMessage.call(transport, fakeInit);
+                await originalOnMessage.call(transport, { jsonrpc: "2.0", method: "notifications/initialized" });
+
+                transport.send = originalSend; // Restore sending capabilities for the real request
+            }
+
+            // Process the actual request!
+            return originalOnMessage.call(transport, msg);
+        };
+
+        await transport.handleRequest(req, res);
     } catch (error) {
-        console.error("SSE connection error:", error);
+        console.error("Stateless MCP request error:", error);
         if (!res.headersSent) {
-            res.status(500).send("Internal Server Error");
+            res.status(500).json({ error: "Internal server error" });
         }
     }
 });
 
-app.post("/sse", async (req, res) => {
-    // The client SDK appends the sessionId to the message POST URL
-    const sessionId = req.query.sessionId;
-
-    if (!sessionId) {
-        return res.status(400).send("No sessionId passed");
-    }
-
-    const transport = transports.get(sessionId);
-
-    if (transport) {
-        try {
-            await transport.handlePostMessage(req, res);
-        } catch (error) {
-            console.error("Error handling post message:", error);
-            res.status(500).send("Message handling failed");
-        }
-    } else {
-        res.status(404).send(`No active SSE connection for session: ${sessionId}`);
-    }
+// GET fallback to explain the configuration requirement to users testing the endpoint in the browser
+app.get("/sse", (req, res) => {
+    res.status(400).send("Vercel Serverless does not support stateful SSE MCP connections due to load balancing. Please configure your IDE client to use type: 'http' instead of 'sse', and ensure it POSTs to this endpoint.");
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Weather MCP server running on SSE at http://localhost:${PORT}/sse`);
+    console.log(`Weather MCP server running on stateless HTTP at http://localhost:${PORT}/sse`);
 });
 
 export default app;
