@@ -205,7 +205,7 @@ const transports = new Map();
 app.get("/sse", async (req, res) => {
     try {
         // @ts-ignore : Required for Cursor's legacy SSE fallback on serverless platforms
-        const transport = new SSEServerTransport("/message", res);
+        const transport = new SSEServerTransport("/sse", res);
         const server = createNewServer();
         await server.connect(transport);
 
@@ -231,7 +231,7 @@ app.get("/sse", async (req, res) => {
     }
 });
 
-app.post("/message", async (req, res) => {
+app.post("/sse", async (req, res) => {
     // The client SDK appends the sessionId to the message POST URL
     const sessionId = req.query.sessionId;
 
