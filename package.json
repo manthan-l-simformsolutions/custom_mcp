@@ -2,10 +2,10 @@
   "name": "weather-server",
   "version": "1.0.0",
   "description": "Custom Weather MCP Server",
-  "main": "index.js",
+  "main": "api/index.js",
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node api/index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
