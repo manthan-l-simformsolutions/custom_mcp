@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import express from "express";
+import cors from "cors";
 import { z } from "zod";
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -196,6 +198,28 @@ server.registerPrompt(
     }
 );
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
-console.log("Weather MCP server running on stdio");
+const app = express();
+app.use(cors());
+
+const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => Math.random().toString(36).substring(2)
+});
+server.connect(transport);
+
+app.all("/sse", async (req, res) => {
+    try {
+        await transport.handleRequest(req, res);
+    } catch (error) {
+        console.error("Error handling MCP request:", error);
+        if (!res.headersSent) {
+            res.status(500).json({ error: "Internal server error" });
+        }
+    }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Weather MCP server running on SSE at http://localhost:${PORT}/sse`);
+});
+
+export default app;
