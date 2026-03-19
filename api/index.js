@@ -1,10 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import express from "express";
+import cors from "cors";
 import { z } from "zod";
+import { exec } from "child_process";
+import { promisify } from "util";
+import fs from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
 
-export const config = {
-    runtime: 'edge', // Forces Vercel to use Edge network (0ms cold start)
-};
+const execAsync = promisify(exec);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function createNewServer() {
     const server = new McpServer({
@@ -68,6 +75,52 @@ function createNewServer() {
                         {
                             type: "text",
                             text: `Error fetching weather data: ${error.message}`,
+                        }
+                    ],
+                    isError: true,
+                };
+            }
+        }
+    );
+
+    server.registerTool(
+        "review_code",
+        {
+            description: "Review local unstaged / staged changes in a git repository",
+            inputSchema: {
+                path: z.string().describe("Absolute path to the git repository"),
+            },
+        },
+        async ({ path }) => {
+            try {
+                const { stdout: diffStdout } = await execAsync("git diff HEAD", { cwd: path });
+                const { stdout: statusStdout } = await execAsync("git status -s", { cwd: path });
+
+                if (!diffStdout) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: "No changes found in the repository to review.",
+                            },
+                        ],
+                    };
+                }
+
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `Repository Status:\n${statusStdout}\n\nDiff:\n${diffStdout}`,
+                        },
+                    ],
+                };
+            } catch (error) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `Error retrieving git diff: ${error.message}`,
                         }
                     ],
                     isError: true,
@@ -142,41 +195,42 @@ function createNewServer() {
     return server;
 }
 
-export default async function handler(req) {
-    if (req.method === "OPTIONS") {
-        return new Response(null, {
-            headers: {
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type, Accept",
-            }
-        });
+const app = express();
+app.use(cors());
+
+// Express middleware to force the required Accept header into the raw Node.js request.
+// The MCP SDK uses @hono/node-server which reads req.rawHeaders, bypassing Express's req.headers mutation.
+app.use((req, res, next) => {
+    let found = false;
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+        if (req.rawHeaders[i].toLowerCase() === 'accept') {
+            req.rawHeaders[i + 1] = 'application/json, text/event-stream';
+            found = true;
+            break;
+        }
     }
+    if (!found) {
+        req.rawHeaders.push('Accept', 'application/json, text/event-stream');
+    }
+    req.headers['accept'] = 'application/json, text/event-stream';
+    next();
+});
 
+// Since Vercel Serverless destroys memory across connections, we MUST use completely stateless HTTP requests instead of SSE.
+app.post("/sse", async (req, res) => {
     try {
-        const transport = new WebStandardStreamableHTTPServerTransport({
-            sessionIdGenerator: undefined,
-            enableJsonResponse: true
-        });
-
-        // Vercel Edge Request headers are technically immutable, but we can clone the request headers to force the Accept header
-        // required by the MCP strict specification
-        const newReqHeaders = new Headers(req.headers);
-        newReqHeaders.set('Accept', 'application/json, text/event-stream');
-
-        const modifiedReq = new Request(req.url, {
-            method: req.method,
-            headers: newReqHeaders,
-            body: req.body,
-            duplex: 'half' // Required for Edge proxying
+        const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: undefined, // Stateless mode
+            enableJsonResponse: true // Return JSON directly in the POST response
         });
 
         const server = createNewServer();
         await server.connect(transport);
 
-        // Stateless initialization intercept
+        // Intercept transport.onmessage to trick the McpServer into thinking it's initialized on every fresh stateless request!
         const originalOnMessage = transport.onmessage;
         transport.onmessage = async (msg) => {
+            // If the client's request is not "initialize", we silently initialize the server first.
             if (msg.method !== 'initialize') {
                 const fakeInit = {
                     jsonrpc: "2.0",
@@ -185,36 +239,41 @@ export default async function handler(req) {
                     params: {
                         protocolVersion: "2024-11-05",
                         capabilities: {},
-                        clientInfo: { name: "vercel-edge-stateless", version: "1.0.0" }
+                        clientInfo: { name: "vercel-stateless-proxy", version: "1.0.0" }
                     }
                 };
 
+                // Temporarily disable transport.send so the server doesn't respond to the fake initialize payload
                 const originalSend = transport.send;
                 transport.send = async () => { };
 
                 await originalOnMessage.call(transport, fakeInit);
                 await originalOnMessage.call(transport, { jsonrpc: "2.0", method: "notifications/initialized" });
 
-                transport.send = originalSend;
+                transport.send = originalSend; // Restore sending capabilities for the real request
             }
+
+            // Process the actual request!
             return originalOnMessage.call(transport, msg);
         };
 
-        const response = await transport.handleRequest(modifiedReq);
-
-        const newHeaders = new Headers(response.headers);
-        newHeaders.set("Access-Control-Allow-Origin", "*");
-
-        return new Response(response.body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers: newHeaders
-        });
-
+        await transport.handleRequest(req, res);
     } catch (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
-            status: 500,
-            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
-        });
+        console.error("Stateless MCP request error:", error);
+        if (!res.headersSent) {
+            res.status(500).json({ error: "Internal server error" });
+        }
     }
-}
+});
+
+// GET fallback to explain the configuration requirement to users testing the endpoint in the browser
+app.get("/sse", (req, res) => {
+    res.status(400).send("Vercel Serverless does not support stateful SSE MCP connections due to load balancing. Please configure your IDE client to use type: 'http' instead of 'sse', and ensure it POSTs to this endpoint.");
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Weather MCP server running on stateless HTTP at http://localhost:${PORT}/sse`);
+});
+
+export default app;
