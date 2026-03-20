@@ -252,7 +252,7 @@ app.post("/sse", async (req, res) => {
 
                 transport.send = originalSend; // Restore sending capabilities for the real request
             }
-
+            res.setHeader("Content-Type", "application/json");
             // Process the actual request!
             return originalOnMessage.call(transport, msg);
         };
