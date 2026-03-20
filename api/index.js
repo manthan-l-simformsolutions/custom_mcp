@@ -271,9 +271,4 @@ app.get("/sse", (req, res) => {
     res.status(400).send("Vercel Serverless does not support stateful SSE MCP connections due to load balancing. Please configure your IDE client to use type: 'http' instead of 'sse', and ensure it POSTs to this endpoint.");
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Weather MCP server running on stateless HTTP at http://localhost:${PORT}/sse`);
-});
-
 export default app;
