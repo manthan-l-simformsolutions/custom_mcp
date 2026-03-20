@@ -198,7 +198,6 @@ function createNewServer() {
 
 const app = express();
 app.use(cors());
-app.use(express.json());
 // Express middleware to force the required Accept header into the raw Node.js request.
 // The MCP SDK uses @hono/node-server which reads req.rawHeaders, bypassing Express's req.headers mutation.
 app.use((req, res, next) => {
@@ -275,3 +274,9 @@ app.get("/sse", (req, res) => {
 });
 
 export default app;
+
+export const config = {
+    api: {
+        bodyParser: false,
+    },
+};
