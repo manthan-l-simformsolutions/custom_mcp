@@ -12,6 +12,7 @@ import { fileURLToPath } from "url";
 const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+app.use(express.json());
 
 function createNewServer() {
     const server = new McpServer({
@@ -177,7 +178,7 @@ function createNewServer() {
             description: "A prompt for an agent to check weather using the get_weather tool",
             argsSchema: { city: z.string().describe("The city to check weather for") }
         },
-        ({ city }) => {
+        async ({ city }) => {
             return {
                 messages: [
                     {
@@ -256,6 +257,8 @@ app.post("/sse", async (req, res) => {
             // Process the actual request!
             return originalOnMessage.call(transport, msg);
         };
+        req.setTimeout(0);
+        res.setTimeout(0);
 
         await transport.handleRequest(req, res);
     } catch (error) {
