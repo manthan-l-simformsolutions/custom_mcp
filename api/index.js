@@ -8,11 +8,11 @@ import { promisify } from "util";
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+import fetch from "node-fetch";
 
 const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-app.use(express.json());
 
 function createNewServer() {
     const server = new McpServer({
@@ -198,7 +198,7 @@ function createNewServer() {
 
 const app = express();
 app.use(cors());
-
+app.use(express.json());
 // Express middleware to force the required Accept header into the raw Node.js request.
 // The MCP SDK uses @hono/node-server which reads req.rawHeaders, bypassing Express's req.headers mutation.
 app.use((req, res, next) => {
